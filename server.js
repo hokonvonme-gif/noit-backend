@@ -53,11 +53,25 @@ try {
 // ---------------------------------------------------------------------------
 // PostgreSQL
 // ---------------------------------------------------------------------------
+const rawDbUrl = (process.env.DATABASE_URL || '').trim();
+if (!rawDbUrl) {
+  console.error('[DB] DATABASE_URL est vide. Définis-la dans Render → Environment.');
+  process.exit(1);
+}
+let dbUrl = rawDbUrl;
+// Si l URL est invalide a cause de caracteres dans le mot de passe, on le signale clairement
+try {
+  // eslint-disable-next-line no-new
+  new URL(dbUrl);
+} catch (e) {
+  console.error('[DB] DATABASE_URL invalide:', e.message);
+  console.error('[DB] Encode le mot de passe: / → %2F  ! → %21  ? → %3F  @ → %40');
+  process.exit(1);
+}
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('localhost')
-    ? false
-    : { rejectUnauthorized: false },
+  connectionString: dbUrl,
+  ssl: dbUrl.includes('localhost') ? false : { rejectUnauthorized: false },
 });
 
 async function initDb() {
