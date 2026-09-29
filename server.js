@@ -387,6 +387,19 @@ app.get('/api/v1/topic/:topic/messages', async (req, res) => {
   res.json({ data: rows });
 });
 
+app.delete('/api/v1/topic/:topic/messages', async (req, res) => {
+  try {
+    const topic = String(req.params.topic || '').toLowerCase().trim();
+    if (!topic) return res.status(400).json({ error: 'topic requis' });
+    const r = await pool.query(`DELETE FROM messages WHERE topic = $1`, [topic]);
+    res.json({ ok: true, deleted: r.rowCount || 0 });
+  } catch (e) {
+    console.error('[clear]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 /** Liste des topics connus */
 app.get('/api/v1/topics', async (_req, res) => {
   const { rows } = await pool.query(
