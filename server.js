@@ -58,10 +58,19 @@ try {
 function buildPool() {
   const url = (process.env.DATABASE_URL || '').trim();
   const host = (process.env.DB_HOST || '').trim();
-  const password = process.env.DB_PASSWORD; // ne pas trim excessif — peut contenir espaces
+  const password = process.env.DB_PASSWORD;
   const user = (process.env.DB_USER || '').trim();
   const database = (process.env.DB_NAME || 'postgres').trim();
   const port = parseInt(process.env.DB_PORT || '6543', 10);
+
+  // Priorité à DATABASE_URL (même valeur que Difa)
+  if (url) {
+    console.log('[DB] Connexion via DATABASE_URL');
+    return new Pool({
+      connectionString: url,
+      ssl: url.includes('localhost') ? false : { rejectUnauthorized: false },
+    });
+  }
 
   if (host && password != null && user) {
     console.log(`[DB] Connexion via DB_HOST=${host} user=${user} port=${port}`);
@@ -75,15 +84,7 @@ function buildPool() {
     });
   }
 
-  if (url) {
-    console.log('[DB] Connexion via DATABASE_URL');
-    return new Pool({
-      connectionString: url,
-      ssl: url.includes('localhost') ? false : { rejectUnauthorized: false },
-    });
-  }
-
-  console.error('[DB] Définis DATABASE_URL  OU  DB_HOST + DB_USER + DB_PASSWORD (+ DB_PORT, DB_NAME)');
+  console.error('[DB] Définis DATABASE_URL (copie celle de Difa)');
   process.exit(1);
 }
 
@@ -421,5 +422,11 @@ initDb()
   })
   .catch((e) => {
     console.error('[DB] Impossible de démarrer :', e.message);
+    if (String(e.message).includes('password authentication failed')) {
+      console.error('[DB] >>> Mot de passe Supabase incorrect.');
+      console.error('[DB] >>> Supabase → Project Settings → Database → Reset database password');
+      console.error('[DB] >>> Puis mets le NOUVEAU mot de passe dans Render → DB_PASSWORD');
+      console.error('[DB] >>> Utilise un mot de passe SANS / ! ? @ # (ex: NoitSupa2026Secure)');
+    }
     process.exit(1);
   });
