@@ -53,26 +53,41 @@ try {
 // ---------------------------------------------------------------------------
 // PostgreSQL
 // ---------------------------------------------------------------------------
-const rawDbUrl = (process.env.DATABASE_URL || '').trim();
-if (!rawDbUrl) {
-  console.error('[DB] DATABASE_URL est vide. Définis-la dans Render → Environment.');
-  process.exit(1);
-}
-let dbUrl = rawDbUrl;
-// Si l URL est invalide a cause de caracteres dans le mot de passe, on le signale clairement
-try {
-  // eslint-disable-next-line no-new
-  new URL(dbUrl);
-} catch (e) {
-  console.error('[DB] DATABASE_URL invalide:', e.message);
-  console.error('[DB] Encode le mot de passe: / → %2F  ! → %21  ? → %3F  @ → %40');
+// Connexion DB : préfère les variables séparées (évite les soucis de caractères spéciaux)
+// ou DATABASE_URL si elle est déjà correcte (copie depuis le service Difa qui marche).
+function buildPool() {
+  const url = (process.env.DATABASE_URL || '').trim();
+  const host = (process.env.DB_HOST || '').trim();
+  const password = process.env.DB_PASSWORD; // ne pas trim excessif — peut contenir espaces
+  const user = (process.env.DB_USER || '').trim();
+  const database = (process.env.DB_NAME || 'postgres').trim();
+  const port = parseInt(process.env.DB_PORT || '6543', 10);
+
+  if (host && password != null && user) {
+    console.log(`[DB] Connexion via DB_HOST=${host} user=${user} port=${port}`);
+    return new Pool({
+      host,
+      port,
+      user,
+      password: String(password),
+      database,
+      ssl: { rejectUnauthorized: false },
+    });
+  }
+
+  if (url) {
+    console.log('[DB] Connexion via DATABASE_URL');
+    return new Pool({
+      connectionString: url,
+      ssl: url.includes('localhost') ? false : { rejectUnauthorized: false },
+    });
+  }
+
+  console.error('[DB] Définis DATABASE_URL  OU  DB_HOST + DB_USER + DB_PASSWORD (+ DB_PORT, DB_NAME)');
   process.exit(1);
 }
 
-const pool = new Pool({
-  connectionString: dbUrl,
-  ssl: dbUrl.includes('localhost') ? false : { rejectUnauthorized: false },
-});
+const pool = buildPool();
 
 async function initDb() {
   await pool.query(`
