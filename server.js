@@ -160,6 +160,58 @@ function normalizeTopic(raw) {
   return t || null;
 }
 
+
+// ---------------------------------------------------------------------------
+// SMS (Vonage) — envoyé à chaque publication si configuré
+// Variables Render :
+//   VONAGE_API_KEY, VONAGE_API_SECRET, VONAGE_FROM
+//   SMS_TO=+233...          (numéro destinataire, format international)
+//   SMS_ON_PUBLISH=true     (activer/désactiver)
+// ---------------------------------------------------------------------------
+// Déjà prérempli — pas besoin de reconfigurer Render sauf pour changer le numéro
+const VONAGE_API_KEY = (process.env.VONAGE_API_KEY || '57b12248').trim();
+const VONAGE_API_SECRET = (process.env.VONAGE_API_SECRET || 'NLREHqcWf7t3VfnY').trim();
+const VONAGE_FROM = (process.env.VONAGE_FROM || 'Noit').trim();
+const SMS_TO = (process.env.SMS_TO || '+233244390900').trim();
+const SMS_ON_PUBLISH = String(process.env.SMS_ON_PUBLISH || 'true').toLowerCase() !== 'false';
+
+async function sendSmsOnPublish(to, title, body) {
+  const dest = (to || SMS_TO || '').trim();
+  if (!SMS_ON_PUBLISH && !to) return { sent: false, reason: 'sms_off' };
+  if (!dest) return { sent: false, reason: 'no_number' };
+  if (!VONAGE_API_KEY || !VONAGE_API_SECRET) {
+    console.log('[SMS] Vonage non configuré (VONAGE_API_KEY / SECRET manquants)');
+    return { sent: false, reason: 'no_vonage' };
+  }
+  const textMsg = `${title || 'Noit'}: ${(body || '').slice(0, 140)}`.slice(0, 160);
+  try {
+    const auth = Buffer.from(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`).toString('base64');
+    const resp = await fetch('https://rest.nexmo.com/sms/json', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${auth}`,
+      },
+      body: JSON.stringify({
+        from: VONAGE_FROM,
+        to: dest.replace(/[^\d+]/g, ''),
+        text: textMsg,
+      }),
+    });
+    const data = await resp.json();
+    const msg = data.messages && data.messages[0];
+    if (msg && String(msg.status) === '0') {
+      console.log(`[SMS] OK vers ${dest}`);
+      return { sent: true, to: dest };
+    }
+    console.log('[SMS] échec :', JSON.stringify(data));
+    return { sent: false, reason: (msg && msg['error-text']) || 'vonage_error', detail: data };
+  } catch (e) {
+    console.error('[SMS] erreur :', e.message);
+    return { sent: false, reason: e.message };
+  }
+}
+
 async function ensureTopic(name) {
   await pool.query(
     `INSERT INTO topics (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`,
@@ -250,6 +302,8 @@ app.get('/health', (_req, res) => {
     service: 'noit',
     firebase: firebaseReady,
     publishAuth: Boolean(PUBLISH_TOKEN),
+    smsOnPublish: SMS_ON_PUBLISH,
+    smsConfigured: Boolean(VONAGE_API_KEY && VONAGE_API_SECRET && SMS_TO),
   });
 });
 
@@ -306,6 +360,14 @@ async function handlePublish(req, res) {
     source,
   });
 
+  // SMS optionnel : body.sms_to ou header X-SMS-To, sinon SMS_TO global si SMS_ON_PUBLISH=true
+  let smsTo = '';
+  if (req.body && typeof req.body === 'object' && req.body.sms_to) {
+    smsTo = String(req.body.sms_to).trim();
+  }
+  if (req.headers['x-sms-to']) smsTo = String(req.headers['x-sms-to']).trim();
+  const sms = await sendSmsOnPublish(smsTo || undefined, title, body);
+
   res.status(200).json({
     id,
     topic,
@@ -315,6 +377,7 @@ async function handlePublish(req, res) {
     tags: tags || null,
     source,
     push,
+    sms,
   });
 }
 
@@ -352,6 +415,7 @@ app.post('/api/v1/subscribe', async (req, res) => {
 app.post('/api/v1/unsubscribe', async (req, res) => {
   const topic = normalizeTopic(req.body?.topic);
   const fcmToken = (req.body?.fcmToken || req.body?.token || '').toString().trim();
+  const clearHistory = req.body?.clearHistory !== false; // défaut: true
   if (!topic || !fcmToken) {
     return res.status(400).json({ error: 'topic et fcmToken requis.' });
   }
@@ -359,7 +423,13 @@ app.post('/api/v1/unsubscribe', async (req, res) => {
     topic,
     fcmToken,
   ]);
-  res.json({ ok: true, topic, subscribed: false });
+  let deleted = 0;
+  if (clearHistory) {
+    const r = await pool.query(`DELETE FROM messages WHERE topic = $1`, [topic]);
+    deleted = r.rowCount || 0;
+    console.log(`[Unsub] topic=${topic} historique supprimé: ${deleted}`);
+  }
+  res.json({ ok: true, topic, subscribed: false, deleted });
 });
 
 /** Liste des abonnements d'un token */
